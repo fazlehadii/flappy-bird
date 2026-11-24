@@ -1,8 +1,6 @@
 package main
 
 import (
-	// "fmt"
-
 	_ "image/png"
 	"log"
 	"math"
@@ -65,13 +63,14 @@ type Pipe struct {
 }
 
 type Bird struct {
-	imgOptions   ebiten.DrawImageOptions
-	frameIdx     int
-	rotation     float64
-	isJumping    bool
-	displacement float64
-	x            float64
-	y            float64
+	imgOptions    ebiten.DrawImageOptions
+	frameIdx      int
+	rotation      float64
+	gravity       float64
+	velocityY     float64
+	rotationSpeed float64
+	x             float64
+	y             float64
 }
 
 const (
@@ -113,9 +112,15 @@ func LoadAssets(g *Game) {
 		log.Fatal(birdUpImageError)
 	}
 
+	startImage, _, startImageError := ebitenutil.NewImageFromFile("assets/images/start.png")
+	if startImageError != nil {
+		log.Fatal(startImageError)
+	}
+
 	g.assets = Assets{
 		background: backroundImage,
 		ground:     groundImage,
+		start:      startImage,
 		pipeTop:    pipeTopImage,
 		pipeBottom: pipeBottomImage,
 		birdDown:   birdDownImage,
@@ -127,10 +132,13 @@ func LoadAssets(g *Game) {
 
 func NewBird() Bird {
 	b := Bird{
-		imgOptions: ebiten.DrawImageOptions{},
-		frameIdx:   0,
-		x:          (float64(screenWidth) / 2) - 50,
-		y:          250,
+		imgOptions:    ebiten.DrawImageOptions{},
+		frameIdx:      0,
+		x:             (float64(screenWidth) / 2) - 50,
+		y:             250,
+		gravity:       0.5,
+		velocityY:     -7.5,
+		rotationSpeed: 0,
 	}
 
 	b.imgOptions.GeoM.SetElement(0, 2, b.x)
@@ -209,46 +217,37 @@ func NewGround() Ground {
 }
 
 func (b *Bird) jump() {
-
-	b.isJumping = true
-	b.displacement = b.y - 50
-	gravity = 0
+	b.velocityY = -7.5
+	b.rotationSpeed = 0
 }
-
-var jumpHeight float64 = 20
-var gravity float64 = 0
 
 func (b *Bird) update(g *Game) {
 
-	if b.isJumping {
+	if b.velocityY < 0 {
+		b.y += b.velocityY
+		b.velocityY += b.gravity
 
-		if b.y > b.displacement {
-			b.y -= jumpHeight
-			jumpHeight -= 5
-
-		} else {
-			jumpHeight = 20
-			b.isJumping = false
+		if b.rotation > -35 {
+			b.rotation -= 5
 
 		}
 
-		if b.rotation > -45 {
-			b.rotation -= 10
-		}
+	} else if b.velocityY >= 0 {
 
-	} else {
 		if b.rotation < 45 {
-			b.rotation += 10
+			b.rotation += b.rotationSpeed
+
+			if b.rotationSpeed <= 4.7 {
+				b.rotationSpeed += 0.4
+
+			}
 		}
 
-		if gravity < 8 {
-			b.y += gravity
-			gravity += 0.2
-
-		} else {
-			b.y += gravity
+		if b.velocityY < 10 {
+			b.velocityY += b.gravity
 		}
 
+		b.y += b.velocityY
 	}
 
 	w, h := g.assets.birdMid.Bounds().Dx(), g.assets.birdMid.Bounds().Dy()
@@ -257,11 +256,6 @@ func (b *Bird) update(g *Game) {
 	b.imgOptions.GeoM.Translate(-float64(w)/2, -float64(h)/2)
 	b.imgOptions.GeoM.Rotate(b.rotation * math.Pi / 180)
 	b.imgOptions.GeoM.Translate(b.x, b.y)
-
-	// b.imgOptions.GeoM.Reset()
-	// b.imgOptions.GeoM.Rotate(b.rotation * math.Pi / 180)
-	// b.imgOptions.GeoM.SetElement(0, 2, b.x)
-	// b.imgOptions.GeoM.SetElement(1, 2, b.y)
 }
 
 func (b *Background) update() {
@@ -351,18 +345,21 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	screen.DrawImage(g.assets.background, &g.background.img1options)
 	screen.DrawImage(g.assets.background, &g.background.img2options)
 
-	for _, pipe := range g.pipes {
-		switch pipe.pipeType {
-		case pipeTop:
-			screen.DrawImage(g.assets.pipeTop, &pipe.imgOptions)
-		case pipeBottom:
-			screen.DrawImage(g.assets.pipeBottom, &pipe.imgOptions)
-		case pipeBoth:
-			screen.DrawImage(g.assets.pipeTop, &pipe.imgOptions)
-			pipe.imgOptions.GeoM.SetElement(1, 2, (pipe.y+800)+120)
-			screen.DrawImage(g.assets.pipeBottom, &pipe.imgOptions)
-		}
+	if g.started {
 
+		for _, pipe := range g.pipes {
+			switch pipe.pipeType {
+			case pipeTop:
+				screen.DrawImage(g.assets.pipeTop, &pipe.imgOptions)
+			case pipeBottom:
+				screen.DrawImage(g.assets.pipeBottom, &pipe.imgOptions)
+			case pipeBoth:
+				screen.DrawImage(g.assets.pipeTop, &pipe.imgOptions)
+				pipe.imgOptions.GeoM.SetElement(1, 2, (pipe.y+800)+120)
+				screen.DrawImage(g.assets.pipeBottom, &pipe.imgOptions)
+			}
+
+		}
 	}
 
 	screen.DrawImage(g.assets.ground, &g.ground.img1options)
@@ -377,6 +374,16 @@ func (g *Game) Draw(screen *ebiten.Image) {
 
 	case 2:
 		screen.DrawImage(g.assets.birdUp, &g.bird.imgOptions)
+	}
+
+	if !g.started {
+		startMsgImgOptions := ebiten.DrawImageOptions{}
+		w, h := g.assets.start.Bounds().Dx(), g.assets.start.Bounds().Dy()
+
+		startMsgImgOptions.GeoM.SetElement(0, 2, (float64(screenWidth)/2)-(float64(w)/2))
+		startMsgImgOptions.GeoM.SetElement(1, 2, (float64(screenHeight)/2)-(float64(h)/2))
+
+		screen.DrawImage(g.assets.start, &startMsgImgOptions)
 	}
 
 }
