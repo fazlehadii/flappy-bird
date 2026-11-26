@@ -1,6 +1,7 @@
 package main
 
 import (
+	"image"
 	_ "image/png"
 	"log"
 	"math"
@@ -27,6 +28,16 @@ type Assets struct {
 
 	gameOver,
 	start *ebiten.Image
+
+	birdMasks  [3]Mask
+	pipeMasks  [2]Mask
+	groundMask Mask
+}
+
+type Mask struct {
+	width  int
+	height int
+	bits   []byte
 }
 
 type Game struct {
@@ -79,35 +90,78 @@ const (
 	pipeBoth   int = 2
 )
 
+func MakeMask(img image.Image) Mask {
+	var bits []byte
+	var currentByte byte
+	var bitCount uint
+
+	addPixel := func(solid bool) {
+		if solid {
+			currentByte |= 1 << bitCount
+		}
+
+		bitCount++
+
+		if bitCount == 8 {
+			bits = append(bits, currentByte)
+			currentByte = 0
+			bitCount = 0
+		}
+
+	}
+
+	m := Mask{
+		width:  img.Bounds().Dx(),
+		height: img.Bounds().Dy(),
+		bits:   []byte{},
+	}
+
+	for y := 0; y < m.height; y++ {
+		for x := 0; x < m.width; x++ {
+			_, _, _, a := img.At(x, y).RGBA()
+
+			addPixel(a >= 32768)
+		}
+	}
+
+	if bitCount > 0 {
+		bits = append(bits, currentByte)
+	}
+
+	m.bits = bits
+
+	return m
+}
+
 func LoadAssets(g *Game) {
 	backroundImage, _, backgroundImageError := ebitenutil.NewImageFromFile("assets/images/background.png")
 	if backgroundImageError != nil {
 		log.Fatal(backgroundImageError)
 	}
 
-	groundImage, _, groundImageError := ebitenutil.NewImageFromFile("assets/images/ground.png")
+	groundImage, orgGroundImage, groundImageError := ebitenutil.NewImageFromFile("assets/images/ground.png")
 	if groundImageError != nil {
 		log.Fatal(groundImageError)
 	}
 
-	pipeTopImage, _, pipeTopImageError := ebitenutil.NewImageFromFile("assets/images/pipe_top.png")
+	pipeTopImage, orgPipeTopImage, pipeTopImageError := ebitenutil.NewImageFromFile("assets/images/pipe_top.png")
 	if pipeTopImageError != nil {
 		log.Fatal(pipeTopImageError)
 	}
-	pipeBottomImage, _, pipeBottomImageError := ebitenutil.NewImageFromFile("assets/images/pipe_bottom.png")
+	pipeBottomImage, orgPipeBottomImage, pipeBottomImageError := ebitenutil.NewImageFromFile("assets/images/pipe_bottom.png")
 	if pipeBottomImageError != nil {
 		log.Fatal(pipeBottomImageError)
 	}
 
-	birdDownImage, _, birdDownImageError := ebitenutil.NewImageFromFile("assets/images/bird_down.png")
+	birdDownImage, orgBirdDownImage, birdDownImageError := ebitenutil.NewImageFromFile("assets/images/bird_down.png")
 	if birdDownImageError != nil {
 		log.Fatal(birdDownImageError)
 	}
-	birdMidImage, _, birdMidImageError := ebitenutil.NewImageFromFile("assets/images/bird_mid.png")
+	birdMidImage, orgBirdMidImage, birdMidImageError := ebitenutil.NewImageFromFile("assets/images/bird_mid.png")
 	if birdMidImageError != nil {
 		log.Fatal(birdMidImageError)
 	}
-	birdUpImage, _, birdUpImageError := ebitenutil.NewImageFromFile("assets/images/bird_up.png")
+	birdUpImage, orgBirdUpImage, birdUpImageError := ebitenutil.NewImageFromFile("assets/images/bird_up.png")
 	if birdUpImageError != nil {
 		log.Fatal(birdUpImageError)
 	}
@@ -128,17 +182,191 @@ func LoadAssets(g *Game) {
 		birdUp:     birdUpImage,
 	}
 
+	g.assets.groundMask = MakeMask(orgGroundImage)
+	g.assets.birdMasks[0] = MakeMask(orgBirdDownImage)
+	g.assets.birdMasks[1] = MakeMask(orgBirdMidImage)
+	g.assets.birdMasks[2] = MakeMask(orgBirdUpImage)
+	g.assets.pipeMasks[0] = MakeMask(orgPipeTopImage)
+	g.assets.pipeMasks[1] = MakeMask(orgPipeBottomImage)
+
+}
+
+func CheckCollisions(g *Game) bool {
+	birdRect := image.Rect(
+		int(g.bird.x-17),
+		int(g.bird.y-12),
+		int(g.bird.x+17),
+		int(g.bird.y+12),
+	)
+	var pipeRect image.Rectangle
+
+	for _, pipe := range g.pipes {
+
+		if pipe.x <= g.bird.x+17 && pipe.x+52 >= g.bird.x-17 {
+			switch pipe.pipeType {
+			case pipeBoth:
+				pipeRect = image.Rect(
+					int(pipe.x),
+					int(pipe.y),
+					int(pipe.x+52),
+					int(pipe.y+800),
+				)
+				if birdRect.Overlaps(pipeRect) {
+					if MaskOverlap(
+						g,
+						g.assets.birdMasks[g.bird.frameIdx],
+						g.assets.pipeMasks[0],
+						g.bird.x-17,
+						g.bird.y-12,
+						pipe.x,
+						pipe.y,
+					) {
+						return true
+					}
+				}
+
+				pipeRect = image.Rect(
+					int(pipe.x),
+					int(pipe.y+800+120),
+					int(pipe.x+52),
+					int(pipe.y+800+120+800),
+				)
+				if birdRect.Overlaps(pipeRect) {
+					if MaskOverlap(
+						g,
+						g.assets.birdMasks[g.bird.frameIdx],
+						g.assets.pipeMasks[1],
+						g.bird.x-17,
+						g.bird.y-12,
+						pipe.x,
+						pipe.y,
+					) {
+						return true
+					}
+				}
+
+			default:
+				pipeRect = image.Rect(
+					int(pipe.x),
+					int(pipe.y),
+					int(pipe.x+52),
+					int(pipe.y+800),
+				)
+				if birdRect.Overlaps(pipeRect) {
+					if MaskOverlap(
+						g,
+						g.assets.birdMasks[g.bird.frameIdx],
+						g.assets.pipeMasks[pipe.pipeType],
+						g.bird.x-17,
+						g.bird.y-12,
+						pipe.x,
+						pipe.y,
+					) {
+						return true
+					}
+				}
+			}
+
+		}
+
+	}
+
+	groundRect := image.Rect(
+		0,
+		int(g.ground.img1cords[1]),
+		screenWidth,
+		int(g.ground.img1cords[1]+219),
+	)
+
+	if birdRect.Overlaps(groundRect) {
+		if MaskOverlap(
+			g,
+			g.assets.birdMasks[g.bird.frameIdx],
+			g.assets.groundMask,
+			g.bird.x-17,
+			g.bird.y-12,
+			0,
+			g.ground.img1cords[1],
+		) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func MaskOverlap(
+	g *Game,
+
+	birdMask Mask,
+	obstacleMask Mask,
+
+	birdX,
+	birdY,
+	obstacleX,
+	obstacleY float64,
+) bool {
+	x0A := birdX
+	y0A := birdY
+
+	x1A := birdX + float64(birdMask.width)
+	y1A := birdY + float64(birdMask.height)
+
+	x0B := obstacleX
+	y0B := obstacleY
+
+	x1B := obstacleX + float64(obstacleMask.width)
+	y1B := obstacleY + float64(obstacleMask.height)
+
+	x0 := max(x0A, x0B)
+	y0 := max(y0A, y0B)
+
+	x1 := min(x1A, x1B)
+	y1 := min(y1A, y1B)
+
+	if x0 >= x1 || y0 >= y1 {
+		return false
+	}
+
+	for pixelY := 0; pixelY < int(y1-y0); pixelY++ {
+		for pixelX := 0; pixelX < int(x1-x0); pixelX++ {
+
+			birdPixelX := int((x0 + float64(pixelX)) - birdX)
+			birdPixelY := int((y0 + float64(pixelY)) - birdY)
+
+			obstaclePixelX := int((x0 + float64(pixelX)) - obstacleX)
+			obstaclePixelY := int((y0 + float64(pixelY)) - obstacleY)
+
+			birdPixelIdx := birdMask.width*birdPixelY + birdPixelX
+			obstaclePixelIdx := obstacleMask.width*obstaclePixelY + obstaclePixelX
+
+			birdByteIdx := birdPixelIdx / 8
+			birdBitIdx := birdPixelIdx % 8
+
+			obstacleByteIdx := obstaclePixelIdx / 8
+			obstacleBitIdx := obstaclePixelIdx % 8
+
+			birdPixelSolid := birdMask.bits[birdByteIdx]&(1<<birdBitIdx) != 0
+			obstaclePixelSolid := obstacleMask.bits[obstacleByteIdx]&(1<<obstacleBitIdx) != 0
+
+			if birdPixelSolid && obstaclePixelSolid {
+				return true
+			}
+
+		}
+
+	}
+
+	return false
 }
 
 func NewBird() Bird {
 	b := Bird{
-		imgOptions:    ebiten.DrawImageOptions{},
-		frameIdx:      0,
-		x:             (float64(screenWidth) / 2) - 50,
-		y:             250,
-		gravity:       0.5,
-		velocityY:     -7.5,
-		rotationSpeed: 0,
+		imgOptions: ebiten.DrawImageOptions{},
+		frameIdx:   0,
+		x:          (float64(screenWidth) / 2) - 50,
+		y:          250,
+		gravity:    0.4,
 	}
 
 	b.imgOptions.GeoM.SetElement(0, 2, b.x)
@@ -168,6 +396,11 @@ func NewPipe(g *Game) Pipe {
 	p.imgOptions.GeoM.SetElement(0, 2, p.x)
 
 	switch pipeType {
+	case pipeBoth:
+		p.y = (rand.Float64()*(float64(screenHeight)-300-200) + 200) - 800
+
+		p.imgOptions.GeoM.SetElement(1, 2, p.y)
+
 	case pipeTop:
 		p.y = (rand.Float64()*(float64(screenHeight)-300-200) + 200) - 800
 
@@ -175,11 +408,6 @@ func NewPipe(g *Game) Pipe {
 
 	case pipeBottom:
 		p.y = rand.Float64()*(float64(screenHeight)-200-300) + 300
-
-		p.imgOptions.GeoM.SetElement(1, 2, p.y)
-
-	case pipeBoth:
-		p.y = (rand.Float64()*(float64(screenHeight)-300-200) + 200) - 800
 
 		p.imgOptions.GeoM.SetElement(1, 2, p.y)
 
@@ -217,7 +445,7 @@ func NewGround() Ground {
 }
 
 func (b *Bird) jump() {
-	b.velocityY = -7.5
+	b.velocityY = -6
 	b.rotationSpeed = 0
 }
 
@@ -227,14 +455,14 @@ func (b *Bird) update(g *Game) {
 		b.y += b.velocityY
 		b.velocityY += b.gravity
 
-		if b.rotation > -35 {
+		if b.rotation > -30 {
 			b.rotation -= 5
 
 		}
 
 	} else if b.velocityY >= 0 {
 
-		if b.rotation < 45 {
+		if b.rotation < 35 {
 			b.rotation += b.rotationSpeed
 
 			if b.rotationSpeed <= 4.7 {
