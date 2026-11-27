@@ -1,15 +1,23 @@
 package main
 
 import (
+	"bytes"
+	"fmt"
 	"image"
 	_ "image/png"
 	"log"
 	"math"
 	"math/rand/v2"
+	"os"
+	"strconv"
 
 	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/audio/mp3"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
+
+	"github.com/hajimehoshi/ebiten/v2/audio"
+	text "github.com/hajimehoshi/ebiten/v2/text/v2"
 )
 
 const screenWidth int = 551
@@ -28,6 +36,12 @@ type Assets struct {
 
 	gameOver,
 	start *ebiten.Image
+
+	gameOverSound *audio.Player
+	scoreSound    *audio.Player
+	fiftySound    *audio.Player
+
+	scoreFont *text.GoTextFace
 
 	birdMasks  [3]Mask
 	pipeMasks  [2]Mask
@@ -55,6 +69,10 @@ type Game struct {
 	bird       Bird
 	pipes      []Pipe
 
+	audioContext *audio.Context
+
+	score int
+
 	started bool
 	state   GameState
 }
@@ -80,6 +98,7 @@ type Pipe struct {
 	imgOptions ebiten.DrawImageOptions
 	x          float64
 	y          float64
+	passed     bool
 }
 
 type Bird struct {
@@ -142,6 +161,52 @@ func MakeMask(img image.Image) Mask {
 	return m
 }
 
+const audioSampleRate = 44100
+
+func loadMP3Player(ctx *audio.Context, path string) (*audio.Player, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+
+	stream, err := mp3.DecodeWithSampleRate(
+		audioSampleRate,
+		bytes.NewReader(data),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("decoding %s: %w", path, err)
+	}
+
+	return ctx.NewPlayer(stream)
+}
+
+func loadScoreFont(path string, size float64) (*text.GoTextFace, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	source, err := text.NewGoTextFaceSource(file)
+	if err != nil {
+		return nil, err
+	}
+
+	return &text.GoTextFace{
+		Source: source,
+		Size:   size,
+	}, nil
+}
+
+func playSound(player *audio.Player) {
+	if err := player.Rewind(); err != nil {
+		log.Println("Audio rewind error:", err)
+		return
+	}
+
+	player.Play()
+}
+
 func LoadAssets(g *Game) {
 	backroundImage, _, backgroundImageError := ebitenutil.NewImageFromFile("assets/images/background.png")
 	if backgroundImageError != nil {
@@ -194,6 +259,42 @@ func LoadAssets(g *Game) {
 		birdDown:   birdDownImage,
 		birdMid:    birdMidImage,
 		birdUp:     birdUpImage,
+	}
+
+	g.audioContext = audio.NewContext(audioSampleRate)
+
+	var err error
+
+	g.assets.gameOverSound, err = loadMP3Player(
+		g.audioContext,
+		"assets/audio/goyim.mp3",
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	g.assets.scoreSound, err = loadMP3Player(
+		g.audioContext,
+		"assets/audio/ues.mp3",
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	g.assets.fiftySound, err = loadMP3Player(
+		g.audioContext,
+		"assets/audio/iconic.mp3",
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	g.assets.scoreFont, err = loadScoreFont(
+		"assets/font/flappy-font.ttf",
+		36,
+	)
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	g.assets.groundMask = MakeMask(orgGroundImage)
@@ -579,6 +680,23 @@ func (p *Pipe) update() {
 
 }
 
+func drawCenteredText(
+	screen *ebiten.Image,
+	value string,
+	y float64,
+	face *text.GoTextFace,
+) {
+	width, _ := text.Measure(value, face, 0)
+
+	var options text.DrawOptions
+	options.GeoM.Translate(
+		(float64(screenWidth)-width)/2,
+		y,
+	)
+
+	text.Draw(screen, value, face, &options)
+}
+
 func (g *Game) reset() {
 	g.background = NewBackground()
 	g.ground = NewGround()
@@ -586,6 +704,7 @@ func (g *Game) reset() {
 
 	g.pipes = nil
 	g.state = StateReady
+	g.score = 0
 }
 
 func (g *Game) Update() error {
@@ -622,10 +741,25 @@ func (g *Game) Update() error {
 
 	for i := range g.pipes {
 		g.pipes[i].update()
+
+		if !g.pipes[i].passed && g.pipes[i].x+52 < g.bird.x {
+			g.pipes[i].passed = true
+
+			g.score++
+
+			switch {
+			case g.score%50 == 0:
+				playSound(g.assets.fiftySound)
+
+			case g.score%5 == 0:
+				playSound(g.assets.scoreSound)
+			}
+		}
 	}
 
 	if CheckCollisions(g) {
 		g.state = StateGameOver
+		playSound(g.assets.gameOverSound)
 		return nil
 	}
 
@@ -696,6 +830,15 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		)
 
 		screen.DrawImage(g.assets.gameOver, &options)
+	}
+
+	if g.state == StatePlaying || g.state == StateGameOver {
+		drawCenteredText(
+			screen,
+			strconv.Itoa(g.score),
+			35,
+			g.assets.scoreFont,
+		)
 	}
 
 }
