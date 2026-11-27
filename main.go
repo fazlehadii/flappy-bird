@@ -40,6 +40,14 @@ type Mask struct {
 	bits   []byte
 }
 
+type GameState int
+
+const (
+	StateReady GameState = iota
+	StatePlaying
+	StateGameOver
+)
+
 type Game struct {
 	assets     Assets
 	background Background
@@ -48,6 +56,7 @@ type Game struct {
 	pipes      []Pipe
 
 	started bool
+	state   GameState
 }
 
 type Background struct {
@@ -170,11 +179,16 @@ func LoadAssets(g *Game) {
 	if startImageError != nil {
 		log.Fatal(startImageError)
 	}
+	gameOverImage, _, gameOverImageError := ebitenutil.NewImageFromFile("assets/images/game_over.png")
+	if gameOverImageError != nil {
+		log.Fatal(gameOverImageError)
+	}
 
 	g.assets = Assets{
 		background: backroundImage,
 		ground:     groundImage,
 		start:      startImage,
+		gameOver:   gameOverImage,
 		pipeTop:    pipeTopImage,
 		pipeBottom: pipeBottomImage,
 		birdDown:   birdDownImage,
@@ -192,54 +206,62 @@ func LoadAssets(g *Game) {
 }
 
 func CheckCollisions(g *Game) bool {
+	birdMask := g.assets.birdMasks[g.bird.frameIdx]
+
+	halfW := float64(birdMask.width) / 2
+	halfH := float64(birdMask.height) / 2
+
+	angle := g.bird.rotation * math.Pi / 180
+
+	cos := math.Abs(math.Cos(angle))
+	sin := math.Abs(math.Sin(angle))
+
+	rotatedHalfW := halfW*cos + halfH*sin
+	rotatedHalfH := halfW*sin + halfH*cos
+
 	birdRect := image.Rect(
-		int(g.bird.x-17),
-		int(g.bird.y-12),
-		int(g.bird.x+17),
-		int(g.bird.y+12),
+		int(math.Floor(g.bird.x-rotatedHalfW)),
+		int(math.Floor(g.bird.y-rotatedHalfH)),
+		int(math.Ceil(g.bird.x+rotatedHalfW)),
+		int(math.Ceil(g.bird.y+rotatedHalfH)),
 	)
 	var pipeRect image.Rectangle
 
 	for _, pipe := range g.pipes {
+		if pipe.x <= float64(birdRect.Max.X) &&
+			pipe.x+52 >= float64(birdRect.Min.X) {
 
-		if pipe.x <= g.bird.x+17 && pipe.x+52 >= g.bird.x-17 {
 			switch pipe.pipeType {
 			case pipeBoth:
 				pipeRect = image.Rect(
-					int(pipe.x),
-					int(pipe.y),
-					int(pipe.x+52),
-					int(pipe.y+800),
+					int(pipe.x), int(pipe.y),
+					int(pipe.x+52), int(pipe.y+800),
 				)
+
 				if birdRect.Overlaps(pipeRect) {
 					if MaskOverlap(
-						g,
-						g.assets.birdMasks[g.bird.frameIdx],
-						g.assets.pipeMasks[0],
-						g.bird.x-17,
-						g.bird.y-12,
-						pipe.x,
-						pipe.y,
+						birdMask, g.assets.pipeMasks[0],
+						g.bird.x, g.bird.y,
+						pipe.x, pipe.y,
+						g.bird.rotation,
 					) {
 						return true
 					}
 				}
 
+				bottomY := pipe.y + 800 + 120
+
 				pipeRect = image.Rect(
-					int(pipe.x),
-					int(pipe.y+800+120),
-					int(pipe.x+52),
-					int(pipe.y+800+120+800),
+					int(pipe.x), int(bottomY),
+					int(pipe.x+52), int(bottomY+800),
 				)
+
 				if birdRect.Overlaps(pipeRect) {
 					if MaskOverlap(
-						g,
-						g.assets.birdMasks[g.bird.frameIdx],
-						g.assets.pipeMasks[1],
-						g.bird.x-17,
-						g.bird.y-12,
-						pipe.x,
-						pipe.y,
+						birdMask, g.assets.pipeMasks[1],
+						g.bird.x, g.bird.y,
+						pipe.x, bottomY,
+						g.bird.rotation,
 					) {
 						return true
 					}
@@ -247,46 +269,37 @@ func CheckCollisions(g *Game) bool {
 
 			default:
 				pipeRect = image.Rect(
-					int(pipe.x),
-					int(pipe.y),
-					int(pipe.x+52),
-					int(pipe.y+800),
+					int(pipe.x), int(pipe.y),
+					int(pipe.x+52), int(pipe.y+800),
 				)
+
 				if birdRect.Overlaps(pipeRect) {
 					if MaskOverlap(
-						g,
-						g.assets.birdMasks[g.bird.frameIdx],
-						g.assets.pipeMasks[pipe.pipeType],
-						g.bird.x-17,
-						g.bird.y-12,
-						pipe.x,
-						pipe.y,
+						birdMask, g.assets.pipeMasks[pipe.pipeType],
+						g.bird.x, g.bird.y,
+						pipe.x, pipe.y,
+						g.bird.rotation,
 					) {
 						return true
 					}
 				}
 			}
-
 		}
-
 	}
 
+	groundY := g.ground.img1cords[1]
+
 	groundRect := image.Rect(
-		0,
-		int(g.ground.img1cords[1]),
-		screenWidth,
-		int(g.ground.img1cords[1]+219),
+		0, int(groundY),
+		screenWidth, int(groundY+219),
 	)
 
 	if birdRect.Overlaps(groundRect) {
 		if MaskOverlap(
-			g,
-			g.assets.birdMasks[g.bird.frameIdx],
-			g.assets.groundMask,
-			g.bird.x-17,
-			g.bird.y-12,
-			0,
-			g.ground.img1cords[1],
+			birdMask, g.assets.groundMask,
+			g.bird.x, g.bird.y,
+			0, groundY,
+			g.bird.rotation,
 		) {
 			return true
 		}
@@ -296,65 +309,93 @@ func CheckCollisions(g *Game) bool {
 }
 
 func MaskOverlap(
-	g *Game,
-
-	birdMask Mask,
-	obstacleMask Mask,
-
-	birdX,
-	birdY,
-	obstacleX,
-	obstacleY float64,
+	birdMask, obstacleMask Mask,
+	birdCenterX, birdCenterY float64,
+	obstacleX, obstacleY float64,
+	rotation float64,
 ) bool {
-	x0A := birdX
-	y0A := birdY
 
-	x1A := birdX + float64(birdMask.width)
-	y1A := birdY + float64(birdMask.height)
+	halfW := float64(birdMask.width) / 2
+	halfH := float64(birdMask.height) / 2
 
-	x0B := obstacleX
-	y0B := obstacleY
+	angle := rotation * math.Pi / 180
 
-	x1B := obstacleX + float64(obstacleMask.width)
-	y1B := obstacleY + float64(obstacleMask.height)
+	cos := math.Cos(angle)
+	sin := math.Sin(angle)
 
-	x0 := max(x0A, x0B)
-	y0 := max(y0A, y0B)
+	// Rotated bird's AABB
+	rotatedHalfW := halfW*math.Abs(cos) + halfH*math.Abs(sin)
+	rotatedHalfH := halfW*math.Abs(sin) + halfH*math.Abs(cos)
 
-	x1 := min(x1A, x1B)
-	y1 := min(y1A, y1B)
+	// Intersection between rotated bird AABB and obstacle
+	x0 := math.Max(birdCenterX-rotatedHalfW, obstacleX)
+	y0 := math.Max(birdCenterY-rotatedHalfH, obstacleY)
+
+	x1 := math.Min(birdCenterX+rotatedHalfW, obstacleX+float64(obstacleMask.width))
+	y1 := math.Min(birdCenterY+rotatedHalfH, obstacleY+float64(obstacleMask.height))
 
 	if x0 >= x1 || y0 >= y1 {
 		return false
 	}
 
-	for pixelY := 0; pixelY < int(y1-y0); pixelY++ {
-		for pixelX := 0; pixelX < int(x1-x0); pixelX++ {
+	// Iterate over screen pixels in the intersection
+	for worldY := int(math.Floor(y0)); worldY < int(math.Ceil(y1)); worldY++ {
+		for worldX := int(math.Floor(x0)); worldX < int(math.Ceil(x1)); worldX++ {
 
-			birdPixelX := int((x0 + float64(pixelX)) - birdX)
-			birdPixelY := int((y0 + float64(pixelY)) - birdY)
+			// Centre of the current screen pixel
+			screenX := float64(worldX) + 0.5
+			screenY := float64(worldY) + 0.5
 
-			obstaclePixelX := int((x0 + float64(pixelX)) - obstacleX)
-			obstaclePixelY := int((y0 + float64(pixelY)) - obstacleY)
+			if screenX < x0 || screenX >= x1 ||
+				screenY < y0 || screenY >= y1 {
+				continue
+			}
 
-			birdPixelIdx := birdMask.width*birdPixelY + birdPixelX
-			obstaclePixelIdx := obstacleMask.width*obstaclePixelY + obstaclePixelX
+			// Position relative to bird's centre
+			dx := screenX - birdCenterX
+			dy := screenY - birdCenterY
 
+			// Inverse rotation
+			birdLocalX := cos*dx + sin*dy + halfW
+			birdLocalY := -sin*dx + cos*dy + halfH
+
+			birdPixelX := int(math.Floor(birdLocalX))
+			birdPixelY := int(math.Floor(birdLocalY))
+
+			// Obstacle coordinates (no rotation)
+			obstaclePixelX := int(math.Floor(screenX - obstacleX))
+			obstaclePixelY := int(math.Floor(screenY - obstacleY))
+
+			// Make sure both coordinates are inside their masks
+			if birdPixelX < 0 || birdPixelX >= birdMask.width ||
+				birdPixelY < 0 || birdPixelY >= birdMask.height {
+				continue
+			}
+
+			if obstaclePixelX < 0 || obstaclePixelX >= obstacleMask.width ||
+				obstaclePixelY < 0 || obstaclePixelY >= obstacleMask.height {
+				continue
+			}
+
+			// Flatten coordinates
+			birdPixelIdx := birdPixelY*birdMask.width + birdPixelX
+			obstaclePixelIdx := obstaclePixelY*obstacleMask.width + obstaclePixelX
+
+			// Locate bits
 			birdByteIdx := birdPixelIdx / 8
 			birdBitIdx := birdPixelIdx % 8
 
 			obstacleByteIdx := obstaclePixelIdx / 8
 			obstacleBitIdx := obstaclePixelIdx % 8
 
-			birdPixelSolid := birdMask.bits[birdByteIdx]&(1<<birdBitIdx) != 0
-			obstaclePixelSolid := obstacleMask.bits[obstacleByteIdx]&(1<<obstacleBitIdx) != 0
+			// Retrieve pixels
+			birdSolid := birdMask.bits[birdByteIdx]&(1<<birdBitIdx) != 0
+			obstacleSolid := obstacleMask.bits[obstacleByteIdx]&(1<<obstacleBitIdx) != 0
 
-			if birdPixelSolid && obstaclePixelSolid {
+			if birdSolid && obstacleSolid {
 				return true
 			}
-
 		}
-
 	}
 
 	return false
@@ -453,10 +494,15 @@ func (b *Bird) update(g *Game) {
 
 	if b.velocityY < 0 {
 		b.y += b.velocityY
+		if b.y-12 <= 0 {
+			b.y = 12
+			b.velocityY = 0
+		}
+
 		b.velocityY += b.gravity
 
 		if b.rotation > -30 {
-			b.rotation -= 5
+			b.rotation -= 10
 
 		}
 
@@ -476,6 +522,11 @@ func (b *Bird) update(g *Game) {
 		}
 
 		b.y += b.velocityY
+		if b.y-12 <= 0 {
+			b.y = 12
+			b.velocityY = 0
+		}
+
 	}
 
 	w, h := g.assets.birdMid.Bounds().Dx(), g.assets.birdMid.Bounds().Dy()
@@ -528,16 +579,32 @@ func (p *Pipe) update() {
 
 }
 
-func (g *Game) Update() error {
-	if inpututil.IsKeyJustPressed(ebiten.KeySpace) || inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
+func (g *Game) reset() {
+	g.background = NewBackground()
+	g.ground = NewGround()
+	g.bird = NewBird()
 
-		if !g.started {
-			g.started = true
+	g.pipes = nil
+	g.state = StateReady
+}
+
+func (g *Game) Update() error {
+	if g.state == StateGameOver {
+		if inpututil.IsKeyJustPressed(ebiten.KeyR) {
+			g.reset()
+		}
+		return nil
+	}
+
+	if inpututil.IsKeyJustPressed(ebiten.KeySpace) ||
+		inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
+
+		if g.state == StateReady {
+			g.state = StatePlaying
 			g.pipes = append(g.pipes, NewPipe(g))
 		}
 
 		g.bird.jump()
-
 	}
 
 	g.background.update()
@@ -547,7 +614,7 @@ func (g *Game) Update() error {
 		g.bird.frameIdx = (g.bird.frameIdx + 1) % 3
 	}
 
-	if !g.started {
+	if g.state != StatePlaying {
 		return nil
 	}
 
@@ -555,6 +622,11 @@ func (g *Game) Update() error {
 
 	for i := range g.pipes {
 		g.pipes[i].update()
+	}
+
+	if CheckCollisions(g) {
+		g.state = StateGameOver
+		return nil
 	}
 
 	if g.pipes[len(g.pipes)-1].x <= (float64(screenWidth) - 55) {
@@ -573,7 +645,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	screen.DrawImage(g.assets.background, &g.background.img1options)
 	screen.DrawImage(g.assets.background, &g.background.img2options)
 
-	if g.started {
+	if g.state == StatePlaying || g.state == StateGameOver {
 
 		for _, pipe := range g.pipes {
 			switch pipe.pipeType {
@@ -604,7 +676,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		screen.DrawImage(g.assets.birdUp, &g.bird.imgOptions)
 	}
 
-	if !g.started {
+	if g.state == StateReady {
 		startMsgImgOptions := ebiten.DrawImageOptions{}
 		w, h := g.assets.start.Bounds().Dx(), g.assets.start.Bounds().Dy()
 
@@ -612,6 +684,18 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		startMsgImgOptions.GeoM.SetElement(1, 2, (float64(screenHeight)/2)-(float64(h)/2))
 
 		screen.DrawImage(g.assets.start, &startMsgImgOptions)
+	}
+
+	if g.state == StateGameOver {
+		w, h := g.assets.gameOver.Bounds().Dx(), g.assets.gameOver.Bounds().Dy()
+
+		var options ebiten.DrawImageOptions
+		options.GeoM.Translate(
+			float64(screenWidth-w)/2,
+			float64(screenHeight-h)/2,
+		)
+
+		screen.DrawImage(g.assets.gameOver, &options)
 	}
 
 }
