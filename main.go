@@ -8,12 +8,10 @@ import (
 	"log"
 	"math"
 	"math/rand/v2"
-	"os"
 	"strconv"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/audio/mp3"
-	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 
 	"github.com/hajimehoshi/ebiten/v2/audio"
@@ -118,6 +116,20 @@ const (
 	pipeBoth   int = 2
 )
 
+func loadImage(path string) (*ebiten.Image, image.Image, error) {
+	data, err := embeddedAssets.ReadFile(path)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return ebiten.NewImageFromImage(img), img, nil
+}
+
 func MakeMask(img image.Image) Mask {
 	var bits []byte
 	var currentByte byte
@@ -164,7 +176,7 @@ func MakeMask(img image.Image) Mask {
 const audioSampleRate = 44100
 
 func loadMP3Player(ctx *audio.Context, path string) (*audio.Player, error) {
-	data, err := os.ReadFile(path)
+	data, err := embeddedAssets.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", path, err)
 	}
@@ -181,13 +193,12 @@ func loadMP3Player(ctx *audio.Context, path string) (*audio.Player, error) {
 }
 
 func loadScoreFont(path string, size float64) (*text.GoTextFace, error) {
-	file, err := os.Open(path)
+	data, err := embeddedAssets.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading font %s: %w", path, err)
 	}
-	defer file.Close()
 
-	source, err := text.NewGoTextFaceSource(file)
+	source, err := text.NewGoTextFaceSource(bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
@@ -208,102 +219,100 @@ func playSound(player *audio.Player) {
 }
 
 func LoadAssets(g *Game) {
-	backroundImage, _, backgroundImageError := ebitenutil.NewImageFromFile("assets/images/background.png")
-	if backgroundImageError != nil {
-		log.Fatal(backgroundImageError)
-	}
-
-	groundImage, orgGroundImage, groundImageError := ebitenutil.NewImageFromFile("assets/images/ground.png")
-	if groundImageError != nil {
-		log.Fatal(groundImageError)
-	}
-
-	pipeTopImage, orgPipeTopImage, pipeTopImageError := ebitenutil.NewImageFromFile("assets/images/pipe_top.png")
-	if pipeTopImageError != nil {
-		log.Fatal(pipeTopImageError)
-	}
-	pipeBottomImage, orgPipeBottomImage, pipeBottomImageError := ebitenutil.NewImageFromFile("assets/images/pipe_bottom.png")
-	if pipeBottomImageError != nil {
-		log.Fatal(pipeBottomImageError)
-	}
-
-	birdDownImage, orgBirdDownImage, birdDownImageError := ebitenutil.NewImageFromFile("assets/images/bird_down.png")
-	if birdDownImageError != nil {
-		log.Fatal(birdDownImageError)
-	}
-	birdMidImage, orgBirdMidImage, birdMidImageError := ebitenutil.NewImageFromFile("assets/images/bird_mid.png")
-	if birdMidImageError != nil {
-		log.Fatal(birdMidImageError)
-	}
-	birdUpImage, orgBirdUpImage, birdUpImageError := ebitenutil.NewImageFromFile("assets/images/bird_up.png")
-	if birdUpImageError != nil {
-		log.Fatal(birdUpImageError)
-	}
-
-	startImage, _, startImageError := ebitenutil.NewImageFromFile("assets/images/start.png")
-	if startImageError != nil {
-		log.Fatal(startImageError)
-	}
-	gameOverImage, _, gameOverImageError := ebitenutil.NewImageFromFile("assets/images/game_over.png")
-	if gameOverImageError != nil {
-		log.Fatal(gameOverImageError)
-	}
-
-	g.assets = Assets{
-		background: backroundImage,
-		ground:     groundImage,
-		start:      startImage,
-		gameOver:   gameOverImage,
-		pipeTop:    pipeTopImage,
-		pipeBottom: pipeBottomImage,
-		birdDown:   birdDownImage,
-		birdMid:    birdMidImage,
-		birdUp:     birdUpImage,
-	}
-
-	g.audioContext = audio.NewContext(audioSampleRate)
-
 	var err error
 
+	// Images
+	var orgGroundImage image.Image
+	var orgPipeTopImage image.Image
+	var orgPipeBottomImage image.Image
+	var orgBirdDownImage image.Image
+	var orgBirdMidImage image.Image
+	var orgBirdUpImage image.Image
+
+	g.assets.background, _, err = loadImage("assets/images/background.png")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	g.assets.ground, orgGroundImage, err = loadImage("assets/images/ground.png")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	g.assets.pipeTop, orgPipeTopImage, err = loadImage("assets/images/pipe_top.png")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	g.assets.pipeBottom, orgPipeBottomImage, err = loadImage("assets/images/pipe_bottom.png")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	g.assets.birdDown, orgBirdDownImage, err = loadImage("assets/images/bird_down.png")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	g.assets.birdMid, orgBirdMidImage, err = loadImage("assets/images/bird_mid.png")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	g.assets.birdUp, orgBirdUpImage, err = loadImage("assets/images/bird_up.png")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	g.assets.start, _, err = loadImage("assets/images/start.png")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	g.assets.gameOver, _, err = loadImage("assets/images/game_over.png")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Audio
+	g.audioContext = audio.NewContext(audioSampleRate)
+
 	g.assets.gameOverSound, err = loadMP3Player(
-		g.audioContext,
-		"assets/audio/goyim.mp3",
+		g.audioContext, "assets/audio/goyim.mp3",
 	)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	g.assets.scoreSound, err = loadMP3Player(
-		g.audioContext,
-		"assets/audio/ues.mp3",
+		g.audioContext, "assets/audio/ues.mp3",
 	)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	g.assets.fiftySound, err = loadMP3Player(
-		g.audioContext,
-		"assets/audio/iconic.mp3",
+		g.audioContext, "assets/audio/iconic.mp3",
 	)
 	if err != nil {
 		log.Fatal(err)
 	}
 
+	// Font
 	g.assets.scoreFont, err = loadScoreFont(
-		"assets/font/flappy-font.ttf",
-		36,
+		"assets/font/flappy-font.ttf", 36,
 	)
 	if err != nil {
 		log.Fatal(err)
 	}
 
+	// Collision masks
 	g.assets.groundMask = MakeMask(orgGroundImage)
 	g.assets.birdMasks[0] = MakeMask(orgBirdDownImage)
 	g.assets.birdMasks[1] = MakeMask(orgBirdMidImage)
 	g.assets.birdMasks[2] = MakeMask(orgBirdUpImage)
 	g.assets.pipeMasks[0] = MakeMask(orgPipeTopImage)
 	g.assets.pipeMasks[1] = MakeMask(orgPipeBottomImage)
-
 }
 
 func CheckCollisions(g *Game) bool {
